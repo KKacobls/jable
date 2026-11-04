@@ -1,0 +1,25 @@
+# Python/cache
+__pycache__/
+*.pyc
+.venv/
+*.log
+
+# User data and local config (never commit)
+/state.json
+/settings.json
+/deleted_tasks.json
+/downloads/
+/image/
+/.trash/
+/.flask-secret
+/server_password.txt
+
+# Generated media/temp
+*.mp4
+*.ts
+*.part
+*.working.mp4
+*.h265-working.mp4
+*.m3u8
+chromedriver*
+.DS_Store
