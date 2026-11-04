@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>設定 | Jable Server</title><link rel="stylesheet" href="/assets/style.css?v=20261104-images-fix4"></head>
+<body><main class="shell"><header class="topbar">
+  <div><p class="eyebrow">Windows · i7-11700 · 24 GB · Cloudflare Tunnel</p><h1>壓縮與伺服器設定</h1></div>
+  <nav class="nav"><a class="nav-link " href="/">任務列表</a><a class="nav-link " href="/gallery">圖片圖庫</a>
+  <a class="nav-link active" href="/settings">壓縮設定</a><a class="nav-link " href="/api-docs">API 串接</a></nav>
+</header>
+<section class="surface"><h2>新任務預設設定</h2><p class="muted">CPU H.265（libx265），不需要 NVIDIA 顯示卡。設定由後端 API 讀取與儲存。</p>
+<p id="settings-feedback" class="submit-feedback" role="status" aria-live="polite" hidden></p>
+<form id="settings-form" class="settings-form">
+<label class="check-line"><input name="compression_enabled" type="checkbox">下載完成後執行 H.265 壓縮</label>
+<label>預設壓縮等級 <strong><span id="level-label">5</span> / 10</strong><input type="range" id="compression-level" name="compression_level" min="1" max="10" step="1" value="5"><span class="hint">1 = 高畫質、大檔案；5 = 平衡；10 = 小檔案、較低畫質。</span></label>
+<label>編碼速度<select name="encoder_preset"><option>ultrafast</option><option>superfast</option><option>veryfast</option><option>faster</option><option selected>fast</option><option>medium</option></select></label>
+<label>每個任務同時下載分段數<input type="number" name="segment_workers" min="1" max="10" value="6"></label>
+<label>同時下載任務數<input type="number" name="max_parallel_downloads" min="1" max="3" value="2"></label>
+<p class="muted">下載目錄：<code id="download-dir">讀取中…</code></p><button type="submit" id="save-settings" class="btn primary">儲存設定</button>
+</form></section>
+<section class="surface" id="tampermonkey"><h2>Tampermonkey 油猴腳本</h2>
+<p class="muted">完整腳本放在下方，可直接複製貼上。保留「複製 JSON」，並加入下載歷史查詢與一鍵提交任務。請先設定伺服器網址，下面文字會同步更新。油猴選單也可隨時修改伺服器網址。</p>
+<label class="userscript-url-label" for="userscript-server">下載伺服器網址（例如 https://j.xekro.top）</label>
+<input class="userscript-url" id="userscript-server" type="url" inputmode="url" placeholder="https://j.xekro.top" spellcheck="false">
+<div class="userscript-toolbar"><button id="userscript-copy" type="button" class="btn primary">複製完整油猴腳本</button>
+<button id="userscript-download" type="button" class="btn secondary">下載目前設定版 .user.js</button></div>
+<p class="muted">完整腳本已內建於設定頁，不需要額外向伺服器下載檔案。複製或下載按鈕都會帶入上方網址。安裝後於影片頁會出現「複製 JSON／送到伺服器／重新查詢／設定網址」四個功能。</p>
+<p id="userscript-feedback" class="submit-feedback" role="status" aria-live="polite" hidden></p>
+<textarea id="userscript-code" readonly spellcheck="false" aria-label="完整 Tampermonkey 油猴程式碼">// ==UserScript==
+// @name         Jable Video Info - 下載紀錄與一鍵送出
+// @namespace    https://j.xekro.top/
+// @version      2.0.0
+// @description  擷取 HLS/名稱/封面、複製 JSON、檢查是否下載過、送出到自己的下載伺服器
+// @author       kk
+// @match        https://jable.tv/*
+// @match        https://www.jable.tv/*
+// @run-at       document-idle
+// @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_setClipboard
+// @grant        GM_registerMenuCommand
+// @connect      *
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  // 可直接編輯，也可在 Tampermonkey 腳本選單中選「設定下載伺服器網址」。
+  const DEFAULT_SERVER_URL = "https://j.xekro.top";
+  const STORAGE_KEY = 'JABLE_SERVER_URL';
+
+  function serverBase() {
+    const value = String(GM_getValue(STORAGE_KEY, DEFAULT_SERVER_URL) || '').trim().replace(/\/+$/, '');
+    try {
+      const url = new URL(value);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('protocol');
+      return value;
+    } catch {
+      throw new Error('請先在油猴選單設定有效的 http(s) 伺服器網址');
+    }
+  }
+
+  function configureServer() {
+    const oldValue = String(GM_getValue(STORAGE_KEY, DEFAULT_SERVER_URL) || '');
+    const entered = prompt('下載伺服器網址（不含結尾 /），例如 https://j.xekro.top', oldValue);
+    if (entered === null) return;
+    try {
+      const parsed = new URL(entered.trim());
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('不支援的協定');
+      GM_setValue(STORAGE_KEY, entered.trim().replace(/\/+$/, ''));
+      alert('已儲存伺服器網址，重新整理影片頁面後套用。');
+    } catch {
+      alert('網址無效，請輸入 http:// 或 https:// 開頭的網址。');
+    }
+  }
+  GM_registerMenuCommand('設定下載伺服器網址', configureServer);
+
+  function extractVideoInfo() {
+    let hlsUrl = '';
+    for (const script of document.querySelectorAll('script')) {
+      const content = script.textContent || '';
+      const match = content.match(/\b(?:var|let|const)\s+hlsUrl\s*=\s*['"](https?:\/\/[^'"\s]+?\.m3u8(?:\?[^'"]*)?)['"]/i);
+      if (match) { hlsUrl = match[1]; break; }
+    }
+    const canonical = document.querySelector('link[rel="canonical"]')?.getAttribute('href') || location.href;
+    const nameMatch = canonical.match(/\/videos\/([a-zA-Z0-9_-]+)(?:\/|[?#]|$)/i);
+    const imageUrl = document.querySelector('meta[property="og:image"]')?.getAttribute('content') || '';
+    return {
+      hls_url: hlsUrl,
+      name: nameMatch ? nameMatch[1] : '',
+      image_url: imageUrl
+    };
+  }
+
+  function requestJson(method, path, body) {
+    return new Promise((resolve, reject) =&gt; {
+      let base;
+      try { base = serverBase(); } catch (err) { reject(err); return; }
+      GM_xmlhttpRequest({
+        method,
+        url: base + path,
+        timeout: 15000,
+        headers: { 'Accept': 'application/json', ...(body ? {'Content-Type': 'application/json'} : {}) },
+        data: body ? JSON.stringify(body) : undefined,
+        onload: result =&gt; {
+          let payload;
+          try { payload = JSON.parse(result.responseText); }
+          catch { reject(new Error(`伺服器回傳非 JSON（HTTP ${result.status}）`)); return; }
+          if (result.status === 404) { resolve({missing: true}); return; }
+          if (result.status &lt; 200 || result.status &gt;= 300 || payload.ok === false) {
+            reject(new Error(payload.message || `HTTP ${result.status}`)); return;
+          }
+          resolve(payload);
+        },
+        ontimeout: () =&gt; reject(new Error('連線逾時，請確認伺服器網址與 Cloudflare Tunnel')),
+        onerror: () =&gt; reject(new Error('無法連線，請確認油猴跨網域權限與伺服器狀態'))
+      });
+    });
+  }
+
+  async function copyText(content) {
+    if (navigator.clipboard &amp;&amp; window.isSecureContext) {
+      try { await navigator.clipboard.writeText(content); return; }
+      catch { /* 交由油猴剪貼簿 API 處理 */ }
+    }
+    GM_setClipboard(content, 'text');
+  }
+
+  function makeButton(label) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'jable-sync-button';
+    button.textContent = label;
+    return button;
+  }
+
+  function installWidget() {
+    if (document.getElementById('jable-video-sync-panel')) return;
+    const info = extractVideoInfo();
+    if (!info.name) return; // 非單部影片頁不注入面板
+    const style = document.createElement('style');
+    style.textContent = `
+      #jable-video-sync-panel { position:fixed;right:16px;bottom:18px;z-index:2147483647;
+        width:min(330px,calc(100vw - 28px));padding:14px;background:#142137;color:#f2f6fc;
+        border:1px solid #426086;border-radius:13px;box-shadow:0 12px 40px #0008;
+        font:14px/1.5 system-ui,'Microsoft JhengHei',sans-serif;}
+      #jable-video-sync-panel * {box-sizing:border-box}
+      #jable-video-sync-panel .jable-sync-title {font-weight:750;font-size:15px;overflow-wrap:anywhere;margin-bottom:6px}
+      #jable-video-sync-panel .jable-sync-status {min-height:40px;color:#cbd8ef;overflow-wrap:anywhere}
+      #jable-video-sync-panel .jable-sync-actions {display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+      #jable-video-sync-panel .jable-sync-button {flex:1 1 45%;background:#326bd1;color:white;
+        border:0;border-radius:8px;padding:8px 10px;font-size:13px;cursor:pointer}
+      #jable-video-sync-panel .jable-sync-button:disabled {opacity:.55;cursor:not-allowed}
+      #jable-video-sync-panel .jable-sync-minimize {background:none;border:0;color:#c5d9ff;
+        float:right;cursor:pointer}
+      #jable-video-sync-panel.is-minimized .jable-sync-status,
+      #jable-video-sync-panel.is-minimized .jable-sync-actions {display:none}
+    `;
+    document.head.appendChild(style);
+
+    const panel = document.createElement('div');
+    panel.id = 'jable-video-sync-panel';
+    const toggle = document.createElement('button');
+    toggle.className = 'jable-sync-minimize'; toggle.type = 'button'; toggle.textContent = '收合';
+    toggle.title = '收合或展開';
+    toggle.addEventListener('click', () =&gt; {
+      panel.classList.toggle('is-minimized');
+      toggle.textContent = panel.classList.contains('is-minimized') ? '展開' : '收合';
+    });
+    const title = document.createElement('div');
+    title.className = 'jable-sync-title'; title.textContent = `Jable：${info.name}`;
+    const status = document.createElement('div');
+    status.className = 'jable-sync-status'; status.textContent = '下載紀錄：查詢中…';
+    const actions = document.createElement('div'); actions.className = 'jable-sync-actions';
+    const copy = makeButton('複製 JSON');
+    const send = makeButton('送到伺服器');
+    const check = makeButton('重新查詢');
+    const config = makeButton('設定網址');
+    actions.append(copy, send, check, config);
+    panel.append(toggle, title, status, actions);
+    document.body.appendChild(panel);
+
+    const message = text =&gt; { status.textContent = text; };
+    async function checkStatus() {
+      check.disabled = true;
+      message('下載紀錄：查詢中…');
+      try {
+        const data = await requestJson('GET', '/api/tasks/' + encodeURIComponent(info.name));
+        if (data.missing) message('下載紀錄：尚未下載');
+        else if (data.task?.completed) {
+          message(data.task.file_exists ? '下載紀錄：已完成（檔案存在）' : '下載紀錄：已下載過（歷史已保留，檔案可能已搬走）');
+        } else message('下載紀錄：' + (data.task?.status || '已有任務'));
+      } catch (err) { message('查詢失敗：' + err.message); }
+      finally { check.disabled = false; }
+    }
+    copy.addEventListener('click', async () =&gt; {
+      Object.assign(info, extractVideoInfo());
+      try { await copyText(JSON.stringify(info, null, 2)); message('已複製 JSON，可貼到伺服器。'); }
+      catch (err) { message('複製失敗：' + err.message); }
+    });
+    send.addEventListener('click', async () =&gt; {
+      // 只有使用者點擊才送出，避免瀏覽影片時意外下載。
+      Object.assign(info, extractVideoInfo()); // 影片稍晚才載入 HLS 時再擷取一次
+      if (!info.hls_url || !info.name) {
+        message('目前找不到 HLS 網址或影片名稱，請等播放來源載入後再按一次。');return;
+      }
+      send.disabled = true;
+      message('正在送出下載任務…');
+      try {
+        const data = await requestJson('POST', '/api/download', info);
+        message(data.added ? '已加入下載佇列！' : '伺服器已有此任務／已下載過，不重複下載。');
+        // 確認傳送結果後更新歷史狀態，不重整網頁。
+        setTimeout(() =&gt; { void checkStatus(); }, 1200);
+      } catch (err) { message('送出失敗：' + err.message); }
+      finally { send.disabled = false; }
+    });
+    check.addEventListener('click', () =&gt; { void checkStatus(); });
+    config.addEventListener('click', configureServer);
+    void checkStatus(); // 即使 HLS 載入較慢，仍先查詢既有下載紀錄
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () =&gt; setTimeout(installWidget, 500), {once:true});
+  else setTimeout(installWidget, 500);
+})();
+</textarea>
+</section></main><script src="/assets/config.js?v=20261104-images-fix4"></script><script src="/assets/app.js?v=20261104-images-fix4" defer></script></body></html>

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API 串接 | Jable Server</title><link rel="stylesheet" href="/assets/style.css?v=20261104-images-fix4"></head>
+<body><main class="shell"><header class="topbar">
+  <div><p class="eyebrow">Windows · i7-11700 · 24 GB · Cloudflare Tunnel</p><h1>程式串接教學</h1></div>
+  <nav class="nav"><a class="nav-link " href="/">任務列表</a><a class="nav-link " href="/gallery">圖片圖庫</a>
+  <a class="nav-link " href="/settings">壓縮設定</a><a class="nav-link active" href="/api-docs">API 串接</a></nav>
+</header>
+<section class="surface"><h2>架構</h2><p class="muted">前端 <code>frontend/</code> 是 HTML、CSS、JavaScript 靜態網站。後端 <code>backend/api.py</code> 提供 JSON API，不依賴 Jinja。預設都從 6003 埠提供，Cloudflare Tunnel 只需要指向 http://127.0.0.1:6003。</p></section>
+<section class="surface"><h2>新增任務</h2><p><code>POST /api/download</code>，JSON <code>Content-Type: application/json</code>：</p>
+<pre class="api-example"><code>{"name":"demo-001","hls_url":"https://example.com/video.m3u8","image_url":""}</code></pre>
+<p>HTTP 201 = 已排入佇列；HTTP 200 + <code>added:false</code> = 已有紀錄，不重複下載；HTTP 422 = 格式錯誤。也接受 <code>{"video_text":"六行貼上格式"}</code>。</p></section>
+<section class="surface"><h2>任務與設定 API</h2><p><code>GET /api/tasks</code>：全部狀態；<code>GET /api/tasks/demo-001</code>：單筆。</p>
+<p><code>POST /api/retry/demo-001</code>：重試；<code>POST /api/retry/errors</code>：重試全部錯誤。</p>
+<p><code>GET /api/settings</code>、<code>PUT /api/settings</code>：讀取／更新設定；<code>GET /api/health</code>：健康檢查。</p></section>
+<section class="surface"><h2>雙進度與壓縮暫停</h2><p>任務欄位：<code>download_current</code>、<code>download_total</code>、<code>compression_percent</code>、<code>compression_state</code>。</p><p><code>POST /api/tasks/demo-001/compression/pause</code>：暫停正在執行的壓縮。</p><p><code>POST /api/tasks/demo-001/compression/resume</code>：繼續同一個 FFmpeg 處理程序。</p><p><code>DELETE /api/tasks/demo-001</code>，JSON：<code>{"confirm":"demo-001"}</code>：將任務與資料移入垃圾桶。伺服器重啟後暫停狀態不能續接。</p></section>
+<section class="surface"><h2>Python 範例</h2><pre class="api-example"><code>import requests
+BASE = "http://127.0.0.1:6003"
+r = requests.post(BASE + "/api/download", json={
+    "name": "demo-001",
+    "hls_url": "https://example.com/video.m3u8",
+    "image_url": ""
+}, timeout=15)
+print(r.status_code, r.json())
+print(requests.get(BASE + "/api/tasks/demo-001", timeout=15).json())</code></pre>
+<p class="muted">完整教學在程式根目錄的 <code>API_INTEGRATION.md</code>，也會另外上傳到 Google Drive。</p></section>
+<section class="surface"><h2>權限說明</h2><p class="muted">依需求不使用密碼或登入，也沒有訪客 IP 白名單。知道服務網址的任何人都可以呼叫這些 API；若你公開 Cloudflare 網域，訪客也能修改下載任務與設定。</p></section></main><script src="/assets/config.js?v=20261104-images-fix4"></script><script src="/assets/app.js?v=20261104-images-fix4" defer></script></body></html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下載任務 | Jable Server</title><link rel="stylesheet" href="/assets/style.css?v=20261104-images-fix4"></head>
+<body><main class="shell"><header class="topbar">
+  <div><p class="eyebrow">Windows · i7-11700 · 24 GB · Cloudflare Tunnel</p><h1>影片下載管理</h1></div>
+  <nav class="nav"><a class="nav-link active" href="/">任務列表</a><a class="nav-link " href="/gallery">圖片圖庫</a>
+  <a class="nav-link " href="/settings">壓縮設定</a><a class="nav-link " href="/api-docs">API 串接</a></nav>
+</header>
+<section class="surface"><h2>新增下載</h2>
+  <p class="muted">網址沒有參數時不載入圖片；在網址後加 ?images=1 則會在任務列表顯示封面。送出成功後清空輸入框，不重整頁面。</p>
+  <p class="muted image-mode-note" id="image-mode-hint" hidden>圖片模式已開啟；列表會顯示封面。若有圖片載入失敗，可在卡片上手動重試。</p><p id="image-debug" class="image-debug" role="status" hidden>圖片模式：已啟用</p>
+  <form id="create-form" class="create-form"><textarea name="video_text" aria-label="下載資訊" placeholder="貼上六行資料（hls / 網址 / name / 名稱 / image / 封面網址），或 JSON 格式" required></textarea>
+  <div class="create-actions"><button class="btn primary" id="submit-task" type="submit">＋ 新增任務</button><span class="hint">Ctrl + Enter 送出</span></div></form>
+  <p id="submit-feedback" class="submit-feedback" role="status" aria-live="polite" hidden></p>
+</section>
+<section class="surface summary"><div><span class="muted">整體進度</span><strong id="global-progress-text">讀取中…</strong></div>
+<div class="global-track"><div id="global-progress-bar"></div></div>
+<div class="toolbar"><button class="btn secondary" type="button" id="retry-errors">重試所有錯誤</button>
+<button class="btn secondary" type="button" id="refresh-now">立即更新狀態</button><a class="btn secondary" id="image-mode-link" href="?images=1">顯示列表圖片</a>
+<label class="auto-toggle"><input type="checkbox" id="auto-refresh" checked> 自動更新（只更新必要文字）</label></div></section>
+<section class="group" id="pending-group"><div class="group-title"><h2>未完成／進行中</h2><span class="count-badge" id="pending-count">0</span></div>
+<div class="tasks" id="pending-tasks"></div><p class="empty" id="pending-empty">沒有未完成任務</p></section>
+<section class="group" id="finished-group"><div class="group-title"><h2>已完成</h2><span class="count-badge" id="finished-count">0</span></div>
+<div class="tasks" id="finished-tasks"></div><p class="empty" id="finished-empty">尚無已完成任務</p></section>
+<template id="task-card-template"><article class="task" data-task-name=""><div class="task-top"><a class="task-name" target="_blank" rel="noopener noreferrer"></a><span class="status"></span></div>
+<div class="progress-row"><span class="count">0 / 1</span><span class="percent">0.0%</span></div><div class="track"><div class="bar"></div></div>
+<div class="task-foot"><span class="missing-file hidden">注意：紀錄已完成，但本機未找到 MP4</span>
+<div class="task-buttons"><button type="button" class="btn small secondary" data-retry-name="">重新下載</button><button type="button" class="btn small subtle" data-copy-name="">複製名稱</button></div></div></article></template>
+</main><script src="/assets/config.js?v=20261104-images-fix4"></script><script src="/assets/app.js?v=20261104-images-fix4" defer></script></body></html>
