@@ -14,6 +14,10 @@
 <section class="surface"><h2>任務與設定 API</h2><p><code>GET /api/tasks</code>：全部狀態；<code>GET /api/tasks/demo-001</code>：單筆。</p>
 <p><code>POST /api/retry/demo-001</code>：重試；<code>POST /api/retry/errors</code>：重試全部錯誤。</p>
 <p><code>GET /api/settings</code>、<code>PUT /api/settings</code>：讀取／更新設定；<code>GET /api/health</code>：健康檢查。</p></section>
+<section class="surface"><h2>手動壓縮（不重新下載）</h2><p><code>POST /api/tasks/demo-001/compression/start</code>：將本機未壓縮 MP4 送入 H.265 佇列，不會連線到原 M3U8。</p>
+<p>如果本機只有 TS，且沒有快取 M3U8，第一次呼叫會回傳 <code>409</code>、<code>needs_segment_confirmation: true</code> 與 <code>available_segments</code>。確認分段數後才能再次送出，例如：</p>
+<pre class="api-example"><code>{"confirm_segments":1817,"delete_ts_after_merge":false}</code></pre>
+<p class="muted">注意：分段數量連續不代表整部影片完整；預設保留來源 TS。若要清除 TS，必須確認分段總數並明確傳送 <code>delete_ts_after_merge:true</code>。本機有完整 MP4 時無需傳任何參數。</p></section>
 <section class="surface"><h2>雙進度與壓縮暫停</h2><p>任務欄位：<code>download_current</code>、<code>download_total</code>、<code>compression_percent</code>、<code>compression_state</code>。</p><p><code>POST /api/tasks/demo-001/compression/pause</code>：暫停正在執行的壓縮。</p><p><code>POST /api/tasks/demo-001/compression/resume</code>：繼續同一個 FFmpeg 處理程序。</p><p><code>DELETE /api/tasks/demo-001</code>，JSON：<code>{"confirm":"demo-001"}</code>：將任務與資料移入垃圾桶。伺服器重啟後暫停狀態不能續接。</p></section>
 <section class="surface"><h2>Python 範例</h2><pre class="api-example"><code>import requests
 BASE = "http://127.0.0.1:6003"

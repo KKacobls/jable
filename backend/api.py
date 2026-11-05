@@ -12,14 +12,16 @@ from pathlib import Path
 import requests
 from flask import Flask, abort, jsonify, request, send_from_directory
 
-from download import cache_playlist, download_video, segment_cache_status, valid_url
-from h265 import encoder_active, encoder_control
+from download import (ENCODER_LOCK, cache_playlist, delete_temp_files, download_video,
+                      merge_files_to_mp4, segment_cache_status, valid_url)
+from h265 import _codec, _program, encode_h265, encoder_active, encoder_control
 from settings import ROOT, atomic_json_write, get_download_dir, get_settings, save_settings, video_locations, existing_video_locations
 
 STATE_FILE = ROOT / 'state.json'
 API_TASK_FIELDS = ('status', 'current', 'total', 'completed', 'file_exists', 'cover_url',
                    'stored_versions', 'download_current', 'download_total', 'download_state',
-                   'compression_percent', 'compression_state', 'merge_percent', 'merge_seconds')
+                   'compression_percent', 'compression_state', 'merge_percent', 'merge_seconds',
+                   'can_start_compression', 'local_raw_exists', 'local_ts_exists')
 IMAGE_DIR = ROOT / 'image'
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 FRONTEND_DIR = ROOT / 'frontend'
@@ -39,6 +41,7 @@ except (OSError,ValueError,json.JSONDecodeError) as ex:
 job_queue = queue.Queue()
 queued = set()
 running = set()
+manual_compressions = set()  # Reserved while an offline merge/encode thread is queued or running.
 workers = []
 workers_lock = threading.Lock()
 # Priority playlist queue: cache signed M3U8 before downloading videos.
@@ -136,7 +139,17 @@ def task_view(name, item):
     original = video_locations(name)['uncompressed']
     legacy = video_locations(name)['legacy']
     compressed = video_locations(name)['compressed']
-    raw_present = original.is_file() or legacy.is_file()
+    raw_present = any(p.is_file() and p.stat().st_size > 0 for p in (original, legacy))
+    # A 100% progress bar can represent old cached counters, NOT a playable MP4.
+    # Checking for at least one TS is cheap and does not touch the expired URL.
+    root = get_download_dir()
+    local_ts = any(any(folder.glob('*.ts')) for folder in
+                   (root / name, root / 'uncompressed' / name))
+    compressed_present = compressed.is_file() and compressed.stat().st_size > 0
+    result['local_raw_exists'] = raw_present
+    result['local_ts_exists'] = local_ts
+    result['can_start_compression'] = (raw_present or local_ts) and not compressed_present and (name not in queued and
+        name not in running and name not in manual_compressions and not encoder_active(name))
     # Older state.json files used current/total for both download and encode.
     # Derive separate progress from files without altering historical JSON.
     total = item.get('download_total') or item.get('expected_segments') or 1
@@ -148,10 +161,16 @@ def task_view(name, item):
     result['download_current'] = (total if raw_present or finished(item) else
                                   min(total, max(0, int(item.get('download_current', 0) or 0))))
     result['download_state'] = item.get('download_state') or ('completed' if raw_present or finished(item) else 'pending')
-    result['compression_percent'] = (item.get('compression_percent') if
-                                     item.get('compression_percent') is not None else
-                                     (100 if compressed.is_file() else 0))
-    result['compression_state'] = item.get('compression_state') or ('completed' if compressed.is_file() else 'pending')
+    comp_state = item.get('compression_state') or ('completed' if compressed_present else 'pending')
+    if comp_state == 'completed' and not compressed_present:
+        comp_state = 'interrupted'  # Don't pretend a deleted MP4 is still compressed.
+    if comp_state in ('queued', 'running', 'paused') and not (name in queued or
+            name in running or name in manual_compressions or encoder_active(name)):
+        comp_state = 'interrupted'  # State persisted across a server restart.
+    result['compression_state'] = comp_state
+    result['compression_percent'] = (0 if comp_state == 'interrupted' else
+        item.get('compression_percent') if item.get('compression_percent') is not None else
+        100 if compressed_present else 0)
     result['merge_percent'] = item.get('merge_percent')
     result['merge_seconds'] = item.get('merge_seconds')
     local_cover = local_cover_name(name)
@@ -200,7 +219,7 @@ def start_workers():
 def enqueue(name):
     start_workers()
     with state_lock:
-        if name not in download_progress or name in running or name in queued:
+        if name not in download_progress or name in running or name in queued or name in manual_compressions:
             return False
         queued.add(name)
         download_progress[name]['status'] = '排隊中...'
@@ -273,7 +292,7 @@ def add_video_task(raw):
     hls_url, name, image_url = parse_video_text(raw.strip())
     with state_lock:
         current = download_progress.get(name)
-        if current and (name in queued or name in running):
+        if current and (name in queued or name in running or name in manual_compressions):
             return 'existing', '這個任務已在下載或排隊中，沒有重複新增。', name
         if current and finished(current):
             return 'existing', '這個名稱已經下載過，保留歷史紀錄，不會重複下載。', name
@@ -347,7 +366,7 @@ def api_task_detail(name):
         if not isinstance(body, dict) or body.get('confirm') != name:
             return jsonify(ok=False,message='請在 confirm 欄位完整提供要刪除的影片名稱'),422
         with state_lock:
-            if name in running or name in queued or encoder_active(name):
+            if name in running or name in queued or name in manual_compressions or encoder_active(name):
                 return jsonify(ok=False,message='任務執行中，請先完成或停止後再刪除'),409
             item = download_progress.get(name)
             if not isinstance(item,dict):
@@ -395,12 +414,171 @@ def api_task_detail(name):
 
 
 
+def _manual_state(name, **changes):
+    """Update only existing task records; never recreate a deleted task."""
+    with state_lock:
+        if name not in download_progress:
+            raise RuntimeError('任務已移除')
+        download_progress[name].update(changes)
+        save_state()
+
+
+def _manual_compression_worker(name, expected_segments, delete_segments):
+    """Use ONLY local MP4/TS. Never request an expired HLS playlist."""
+    try:
+        paths = video_locations(name)
+        raw = next((p for p in (paths['uncompressed'], paths['legacy'])
+                    if p.is_file() and p.stat().st_size > 0 and _codec(p)), None)
+        if raw is None:
+            status = segment_cache_status(name, get_download_dir(), expected_segments)
+            if not status['complete']:
+                raise RuntimeError('TS 分段不完整或有缺號；未封裝也未刪除任何 TS')
+            count = status['expected_segments']
+            folder = Path(status['folder'])
+            ts_files = [folder / f'{i:05d}.ts' for i in range(count)]
+            raw = paths['uncompressed']
+            _manual_state(name, status='正在從本機 TS 封裝 MP4...',
+                          download_state='merging', merge_percent=0,
+                          download_current=count, download_total=count)
+            last_report = [-1]
+            def on_merge(percent, seconds):
+                # Save percentages at most every five points; don't rewrite state.json on every frame.
+                bucket = percent // 5 if percent is not None else None
+                if bucket != last_report[0] or percent == 100:
+                    last_report[0] = bucket
+                    _manual_state(name, merge_percent=percent,
+                                  merge_seconds=round(seconds, 1))
+            merge_files_to_mp4(ts_files, raw, progress_callback=on_merge)
+            # For unknown M3U8 lengths this is only done with user's explicit
+            # confirmation; a clean ffprobe does not prove the movie has an end.
+            if delete_segments:
+                delete_temp_files(folder, ts_files)
+            _manual_state(name, download_state='completed', merge_percent=100,
+                          download_current=count, download_total=count)
+
+        if not raw.is_file() or not _codec(raw):
+            raise RuntimeError('本機找不到可播放的 MP4，請先完成 TS 封裝')
+        compressed = paths['compressed']
+        if compressed.is_file() and _codec(compressed) == 'hevc':
+            _manual_state(name, status='下載完成（原本已有 H.265 壓縮影片）',
+                          download_state='completed', compression_state='completed',
+                          compression_percent=100)
+            return
+        if _codec(raw) == 'hevc':
+            compressed.parent.mkdir(parents=True, exist_ok=True)
+            temp = compressed.with_name(compressed.name + '.copying')
+            try:
+                shutil.copy2(raw, temp)
+                os.replace(temp, compressed)
+            finally:
+                temp.unlink(missing_ok=True)
+            _manual_state(name, status='下載完成（來源已是 H.265，已保留兩份）',
+                          download_state='completed', compression_state='completed',
+                          compression_percent=100)
+            return
+        options = get_settings()
+        _manual_state(name, status='等待壓縮資源...', compression_state='queued')
+        with ENCODER_LOCK:  # Share the CPU encoder slot with automatic downloads.
+            _manual_state(name, status='正在 CPU H.265 壓縮...', compression_state='running')
+            last_bucket = [-1]
+            def on_encode(percent):
+                bucket = percent // 5
+                if bucket != last_bucket[0] or percent >= 99:
+                    last_bucket[0] = bucket
+                    _manual_state(name, compression_percent=percent)
+            smaller = encode_h265(raw, on_encode, level=options['compression_level'],
+                                  preset=options['encoder_preset'], output_path=compressed,
+                                  task_name=name)
+        if smaller:
+            _manual_state(name, status='下載完成（手動 H.265 壓縮成功，原檔保留）',
+                          download_state='completed', compression_state='completed',
+                          compression_percent=100)
+        else:
+            _manual_state(name, status='下載完成（H.265 轉檔後較大，保留原檔）',
+                          download_state='completed', compression_state='skipped',
+                          compression_percent=100)
+    except Exception as exc:
+        with state_lock:
+            item = download_progress.get(name)
+            if item is not None:
+                item['compression_state'] = 'error'
+                item['status'] = '錯誤: 本機壓縮失敗：' + str(exc)[:250]
+                save_state()
+    finally:
+        with state_lock:
+            manual_compressions.discard(name)
+
+
+def _start_manual_compression(name):
+    """Manual retry/compression is always offline and never calls _playlist()."""
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify(ok=False, message='請提供 JSON 物件'), 422
+    if not _program('ffmpeg') or not _program('ffprobe'):
+        return jsonify(ok=False, message='找不到 FFmpeg 或 ffprobe，請先安裝後重啟伺服器'), 409
+    with state_lock:
+        item = download_progress.get(name)
+        if not isinstance(item, dict):
+            return jsonify(ok=False, message='找不到任務'), 404
+        if name in queued or name in running or name in manual_compressions or encoder_active(name):
+            return jsonify(ok=False, message='此任務正在下載或壓縮，請不要重複送出'), 409
+        paths = video_locations(name)
+        compressed = paths['compressed']
+        if compressed.is_file() and _codec(compressed) == 'hevc':
+            return jsonify(ok=True, queued=False, message='本機已有 H.265 影片，無需再次壓縮')
+        raw_exists = any(p.is_file() and p.stat().st_size > 0 and _codec(p)
+                         for p in (paths['uncompressed'], paths['legacy']))
+        expected = None
+        delete_after_merge = False
+        if not raw_exists:
+            ts = segment_cache_status(name, get_download_dir(), item.get('expected_segments'))
+            count = ts['cached_segments']
+            expected = ts['expected_segments']
+            if not expected:
+                if count == 0:
+                    return jsonify(ok=False, message='本機沒有可用 MP4 或 TS；410 網址已過期，需要重新取得影片來源'), 409
+                confirmed = payload.get('confirm_segments')
+                if type(confirmed) is not int or confirmed != count:
+                    return jsonify(ok=False, needs_segment_confirmation=True,
+                                   available_segments=count,
+                                   message=f'已找到 {count} 個本機 TS，但沒有 M3U8，無法保證影片完整；需先確認分段總數才能離線合併'), 409
+                expected = count
+            if not segment_cache_status(name, get_download_dir(), expected)['complete']:
+                return jsonify(ok=False,
+                               message=f'本機 TS 有缺號或不完整（預期 {expected} 段），已保留原始分段'), 409
+            # Auto-delete only for known playlist lengths; otherwise user must
+            # explicitly request it after acknowledging the completeness risk.
+            delete_after_merge = (bool(item.get('expected_segments')) or ts['playlist_cached'] or
+                                  payload.get('delete_ts_after_merge') is True)
+        manual_compressions.add(name)
+        item.update(status='等待本機合併／壓縮...', compression_state='queued',
+                    compression_percent=0)
+        save_state()
+    thread = threading.Thread(target=_manual_compression_worker,
+                              args=(name, expected, delete_after_merge),
+                              daemon=True, name='manual-compress-'+name)
+    try:
+        thread.start()
+    except Exception as exc:
+        with state_lock:
+            manual_compressions.discard(name)
+            if name in download_progress:
+                download_progress[name]['compression_state'] = 'error'
+                download_progress[name]['status'] = '錯誤: 無法啟動手動壓縮：' + str(exc)[:180]
+                save_state()
+        return jsonify(ok=False,message='無法啟動手動壓縮'),500
+    return jsonify(ok=True, queued=True, name=name,
+                   message='已開始本機封裝／壓縮；不會重新要求過期 M3U8'), 202
+
+
 @app.route('/api/tasks/<name>/compression/<action>', methods=['POST', 'OPTIONS'])
 def api_compression_control(name, action):
     if request.method == 'OPTIONS':
         return '', 204
-    if not NAME_RE.fullmatch(name) or action not in ('pause', 'resume'):
+    if not NAME_RE.fullmatch(name) or action not in ('start', 'pause', 'resume'):
         return jsonify(ok=False,message='找不到工作或操作'),404
+    if action == 'start':
+        return _start_manual_compression(name)
     with state_lock:
         item = download_progress.get(name)
         if not isinstance(item,dict):
@@ -468,8 +646,8 @@ def api_update_source(name):
         current = download_progress.get(name)
         if not isinstance(current, dict):
             return jsonify(ok=False, message='找不到任務'), 404
-        if name in queued or name in running:
-            return jsonify(ok=False, message='任務正在下載中，請等目前工作結束再更新來源'), 409
+        if name in queued or name in running or name in manual_compressions:
+            return jsonify(ok=False, message='任務正在下載或壓縮中，請等目前工作結束再更新來源'), 409
         if finished(current):
             return jsonify(ok=False, message='歷史紀錄標示為已完成，不會自動重新下載'), 409
         current['hls_url'] = url
@@ -487,7 +665,7 @@ def api_health():
     if request.method == 'OPTIONS':
         return '', 204
     from h265 import _program
-    return jsonify(ok=True, service='JableTVDownload', version='2026-11-04-dual-progress-pause-trash-v5',
+    return jsonify(ok=True, service='JableTVDownload', version='2026-11-05-manual-offline-compression-v6',
                    ffmpeg_available=bool(_program('ffmpeg')),
                    ffprobe_available=bool(_program('ffprobe')))
 
@@ -560,7 +738,7 @@ def retry_download(name):
         item = download_progress.get(name)
         if not isinstance(item, dict):
             return jsonify(ok=False, message='找不到任務'), 404
-        if name in running or name in queued:
+        if name in running or name in queued or name in manual_compressions:
             return jsonify(ok=True, queued=False, message='任務已在執行')
         if finished(item) and video_file(name).is_file():
             return jsonify(ok=True, queued=False, message='影片檔案已存在，無需重試')

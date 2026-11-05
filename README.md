@@ -87,3 +87,8 @@ python ORGANIZE_OLD_DOWNLOADS.py --apply
 任務列表現在顯示下載進度與 H.265 壓縮進度兩條進度條。壓縮進行中可用「暫停壓縮／繼續壓縮」控制 FFmpeg 進程（需要 `psutil`，已加入 requirements.txt）。暫停僅限本次伺服器執行期間；重新啟動 Python 後需重新開始壓縮，但原始 MP4 仍保留。
 
 任務卡片有「垃圾桶」可確認後軟刪除，移到 `downloads/.trash/` 並移除任務項目，允許重新提交同名任務。垃圾桶內容仍占磁碟空間。完整 API、離線合併進度、TS 清理及 GitHub 部署請看 [`NEW_VERSION_GUIDE.md`](NEW_VERSION_GUIDE.md)、[`GITHUB_SETUP.md`](GITHUB_SETUP.md)。
+
+
+## 手動開始壓縮（2026-11-05）
+
+當任務遇到 M3U8 `410 Gone`，但本機已有 MP4，任務列表會顯示「開始壓縮」，直接使用現有影片進行 H.265 壓縮，**不會重抓網路影片**。如果只留有 TS，則顯示「合併 TS／壓縮」；有快取的完整 M3U8 可直接離線合併，否則須明確確認本機段數。沒有 M3U8 時，TS 預設保留，避免缺少片尾卻刪除唯一分段。API 與 PowerShell 範例見 [`API_INTEGRATION.md`](API_INTEGRATION.md)。

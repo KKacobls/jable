@@ -254,3 +254,29 @@ print(response.status_code,response.json())
 - `DELETE /api/tasks/<name>`，JSON `{"confirm":"<name>"}`：將任務、影片與封面移入 `downloads/.trash`；執行中拒絕。
 
 可接受壓縮狀態包含 `pending`、`queued`、`running`、`paused`、`completed`、`skipped`、`disabled`、`error`、`interrupted`。暫停不是跨伺服器重啟的續傳機制。
+
+
+## 手動壓縮既有 MP4／離線合併 TS（2026-11-05）
+
+任務頁有「開始壓縮」或「合併 TS／壓縮」按鈕，僅使用伺服器本機檔案，不會重新連上可能已回傳 `410 Gone` 的 HLS 來源。按鈕與 API 會偵測本機 `uncompressed/`、舊版下載目錄及 TS 分段。
+
+- `POST /api/tasks/<name>/compression/start`：已有本機可播放 MP4 時，回傳 `202`，背景開始壓縮。即使設定關閉自動壓縮，手動要求仍會執行。
+- 只有 TS 且有可靠的 M3U8 快取／已知總數：全部序號齊全才會離線封裝與壓縮。
+- 只有 TS 而沒有 M3U8／預期總數：首次回 `409`、`needs_segment_confirmation:true`、`available_segments`；請在任務頁確認分段數，才會執行離線合併。
+- 預設保留沒有 M3U8 的舊任務 TS。明確傳入 `delete_ts_after_merge:true` 才會在 MP4 生成並通過 FFprobe 驗證後清除該次使用的 TS；**FFprobe 通過不代表確認影片片尾完整**。
+- `POST /api/tasks/<name>/compression/pause`／`resume`：仍可在實際編碼期間暫停與恢復 FFmpeg。重啟伺服器無法接續中斷的編碼。
+- 佇列中的下載、壓縮以及移到垃圾桶的操作互斥，避免同一筆任務損壞檔案。壓縮版本與原始 MP4 分開保存。
+
+範例（PowerShell，一行）：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:6003/api/tasks/pred-899/compression/start"
+```
+
+若回覆 `409` 且 `needs_segment_confirmation:true`，先用網站按鈕檢查並確認總數，或人工確認後再送：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:6003/api/tasks/pred-899/compression/start" -ContentType 'application/json' -Body '{"confirm_segments":1817,"delete_ts_after_merge":false}'
+```
+
+> `1817` 只是先前在該電腦看到的 TS 數量；不能當作已確認的原始總數。

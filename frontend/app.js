@@ -32,7 +32,9 @@ async function jsonFetch(path, options={}) {
   try { data = await response.json(); }
   catch { throw new Error(`HTTP ${response.status}：非 JSON 回應`); }
   if (!response.ok || data.ok === false) {
-    throw new Error(data.message || `HTTP ${response.status}`);
+    const error = new Error(data.message || `HTTP ${response.status}`);
+    error.details = data;
+    throw error;
   }
   return data;
 }
@@ -59,7 +61,7 @@ function ensureDualProgress(card) {
   section.append(heading, barTrack);
   track?.after(section);
   const actions = card.querySelector('.task-buttons');
-  for (const [action,text] of [['pause','暫停壓縮'],['resume','繼續壓縮']]) {
+  for (const [action,text] of [['start','開始壓縮'],['pause','暫停壓縮'],['resume','繼續壓縮']]) {
     const button = document.createElement('button');
     button.type = 'button'; button.className = 'btn small secondary';
     button.dataset.compressionAction = action;
@@ -89,13 +91,22 @@ function updateDualProgress(card,item) {
   setText(card.querySelector('.compression-percent'),pct.toFixed(1)+'%');
   const cbar=card.querySelector('.compression-bar');
   if (cbar) cbar.style.width=pct+'%';
+  const start=card.querySelector('[data-compression-action="start"]');
+  if (start) {
+    start.hidden = !item.can_start_compression || ['queued','running','paused'].includes(compState);
+    const label = item.local_raw_exists ? '開始壓縮' : '合併 TS／壓縮';
+    setText(start,label);
+    start.title = item.local_raw_exists ? '直接壓縮現有 MP4，不重新下載' :
+      '從本機 TS 嘗試離線合併，不會存取過期的 M3U8';
+  }
   const pause=card.querySelector('[data-compression-action="pause"]');
   const resume=card.querySelector('[data-compression-action="resume"]');
   if (pause) pause.hidden=compState!=='running';
   if (resume) resume.hidden=compState!=='paused';
   const label=card.querySelector('.download-progress-label');
   if (label) setText(label,item.download_state==='merging' && item.merge_percent!==null && item.merge_percent!==undefined
-    ? `下載已完成 · 封裝 ${item.merge_percent}%` : '下載');
+    ? `TS 已下載 · 封裝 ${item.merge_percent}%` :
+    (!item.file_exists && rawPercent >= 100 ? '分段計數 100%（尚未有 MP4）' : '下載'));
 }
 function taskCard(name) {
   const template = byId('task-card-template');
@@ -370,8 +381,21 @@ function initTaskActions() {
       if (!name) return;
       control.disabled = true;
       try {
-        const result = await jsonFetch('/api/tasks/'+encodeURIComponent(name)+
-          '/compression/'+encodeURIComponent(control.dataset.compressionAction),{method:'POST'});
+        const path = '/api/tasks/'+encodeURIComponent(name)+'/compression/'+
+          encodeURIComponent(control.dataset.compressionAction);
+        let result;
+        try {
+          result = await jsonFetch(path,{method:'POST'});
+        } catch (error) {
+          if (control.dataset.compressionAction !== 'start' || !error.details?.needs_segment_confirmation) throw error;
+          const count = error.details.available_segments;
+          if (!window.confirm(`本機找到 ${count} 個 TS，沒有原始 M3U8，無法確定片尾是否完整。\n\n確定要假設這就是完整分段，離線合併並壓縮嗎？`)) return;
+          const remove = window.confirm('合併通過 FFprobe 後要刪除原本的 TS 嗎？\n\n注意：無 M3U8 時無法確認影片片尾完整。建議按「取消」保留 TS，播放影片確認後再刪。');
+          result = await jsonFetch(path,{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({confirm_segments:count,delete_ts_after_merge:remove})
+          });
+        }
         feedback(result.message || '已更新壓縮狀態');
         void refreshTasks(true);
       } catch(error) {feedback('操作失敗：'+error.message,'warn');}
