@@ -1,3 +1,5 @@
+# Based on hcjohn463/JableTVDownload (Apache-2.0).
+# Modified: cover download now accepts an image URL directly.
 import requests
 import os
 

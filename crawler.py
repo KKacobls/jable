@@ -1,3 +1,5 @@
+# Based on hcjohn463/JableTVDownload (Apache-2.0).
+# Modified: crawler implementation and integration for the server variant.
 import os
 import requests
 from config import headers

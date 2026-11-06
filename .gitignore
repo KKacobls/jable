@@ -1,3 +1,4 @@
+# Modified from hcjohn463/JableTVDownload (Apache-2.0): ignore local server state, media, and generated files.
 # Python/cache
 __pycache__/
 *.pyc

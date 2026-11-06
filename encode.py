@@ -1,3 +1,5 @@
+# Based on hcjohn463/JableTVDownload (Apache-2.0).
+# Modified: FFmpeg conversion logic and compatibility with the server variant.
 import os
 import subprocess
 def ffmpegEncode(folder_path, file_name, action):

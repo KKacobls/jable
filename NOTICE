@@ -1,0 +1,21 @@
+Jable Server / JableTVDownload derivative
+
+This repository is a modified, independently maintained derivative of:
+  JableTVDownload
+  https://github.com/hcjohn463/JableTVDownload
+  Original project author credit: hcjohn463 (see upstream main.py)
+
+The original project is distributed under the Apache License, Version 2.0.
+The full license text is retained in LICENSE. The upstream repository had no
+NOTICE file at the time this derivative attribution was prepared (2026-11-06).
+
+Modification notice (KKacobls/jable, 2026):
+  * Reworked the application into a Flask-based JSON API and Web UI.
+  * Added task/state management, HLS playlist caching, TS recovery/merge,
+    separate uncompressed and H.265 files, compression controls, and trash.
+  * Updated or replaced the upstream-named files marked with modification
+    notices in the source tree, while leaving unchanged upstream files intact.
+
+This repository is not an official release of the original project and does
+not imply endorsement by the upstream author. Original attribution and other
+notices that remain applicable are preserved. See README.md for details.

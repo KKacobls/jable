@@ -1,3 +1,5 @@
+# Based on hcjohn463/JableTVDownload (Apache-2.0).
+# Substantially modified: resumable HLS downloads, M3U8/TS caching and local video processing.
 """Resumable HLS segment download, valid MP4 remux and single-CPU HEVC pass."""
 import os
 import json

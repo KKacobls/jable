@@ -1,3 +1,5 @@
+# Based on hcjohn463/JableTVDownload (Apache-2.0).
+# Modified: Selenium browser integration for movie links.
 # In[0]:
 import requests
 from config import headers

@@ -1,5 +1,17 @@
 # Jable Server — Windows 10/11 前後端分離版
 
+> **專案來源與授權**：本專案為 [hcjohn463/JableTVDownload](https://github.com/hcjohn463/JableTVDownload) 的獨立維護修改版本（衍生作品），原始專案作者註記為 **hcjohn463**，原始授權為 **Apache License 2.0**。本 Repository 並非原作者官方發布版本。詳見 [LICENSE](LICENSE) 與 [NOTICE](NOTICE)。
+
+## 原始來源、修改項目與授權
+
+- **上游原始碼**：[hcjohn463/JableTVDownload](https://github.com/hcjohn463/JableTVDownload)
+- **原始專案作者註記**：hcjohn463（見上游 `main.py`）
+- **授權**：沿用 Apache License, Version 2.0；原始專案的授權與適用的著作權／作者資訊仍有效
+- **本修改版**：[KKacobls/jable](https://github.com/KKacobls/jable)，獨立維護，不代表原作者立場或官方版本
+
+本版在原有基礎上擴充／改寫了 Flask JSON API、獨立 Web 前端、任務佇列與狀態保存、M3U8 快取與 TS 離線合併、H.265 雙版本與壓縮進度、手動壓縮、暫停／繼續壓縮以及可復原垃圾桶等功能。重用並有修改的原始檔案已加註修改聲明；未修改的上游檔案保留原樣。此 Repository 的 Git 歷史是修改版另行建立的，完整原始歷史請見上游專案。
+
+
 **Windows 10 / Intel Core i7-11700、24 GB RAM、無 NVIDIA 獨立顯卡** 的影片下載管理介面。
 
 ## 快速啟動

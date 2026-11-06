@@ -1,3 +1,4 @@
+# Based on hcjohn463/JableTVDownload (Apache-2.0); dependencies revised for the Flask/FFmpeg server edition.
 Flask>=3.0,<4
 waitress>=3.0,<4
 requests>=2.32,<3

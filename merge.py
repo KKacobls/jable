@@ -1,3 +1,5 @@
+# Based on hcjohn463/JableTVDownload (Apache-2.0).
+# Modified: TS merge and FFmpeg compatibility logic.
 import os
 import time
 def mergeMp4(folderPath, tsList):

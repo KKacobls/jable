@@ -1,4 +1,5 @@
 @echo off
+REM Based on hcjohn463/JableTVDownload (Apache-2.0); modified setup for the Windows server variant.
 chcp 65001 >nul
 cd /d "%~dp0"
 if not exist "jable\Scripts\python.exe" (
